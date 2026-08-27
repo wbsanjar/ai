@@ -60,6 +60,16 @@ function dist(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y);
 }
 
+// Convert a normalized landmark to mirrored pixel coordinates, matching the
+// CSS-mirrored video preview. (X is flipped because the preview is a selfie
+// mirror, while MediaPipe reports the raw camera orientation.)
+function px(lm, i) {
+  return {
+    x: (1 - lm[i].x) * canvas.width,
+    y: lm[i].y * canvas.height,
+  };
+}
+
 // Shared: draw a glowing (layered) line
 function glowLine(x1, y1, x2, y2, color, width, layers) {
   for (let i = layers; i >= 1; i--) {
@@ -122,16 +132,17 @@ function handSize(lm) {
 // Draw neon skeleton for one hand
 function drawSkeleton(lm, color) {
   for (const [a, b] of HAND_CONNECTIONS) {
-    const p1 = { x: lm[a].x * canvas.width, y: lm[a].y * canvas.height };
-    const p2 = { x: lm[b].x * canvas.width, y: lm[b].y * canvas.height };
+    const p1 = px(lm, a);
+    const p2 = px(lm, b);
     glowLine(p1.x, p1.y, p2.x, p2.y, color, 2, 5);
   }
   // Joint dots
-  for (const p of lm) {
+  for (let i = 0; i < lm.length; i++) {
+    const p = px(lm, i);
     ctx.globalAlpha = 0.8;
     ctx.fillStyle = "#ffffff";
     ctx.beginPath();
-    ctx.arc(p.x * canvas.width, p.y * canvas.height, 2, 0, Math.PI * 2);
+    ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -150,15 +161,15 @@ function updateBeam(hands, dt) {
   state.beamAlpha += (target - state.beamAlpha) * Math.min(1, dt * 8);
   state.beamAlpha = Math.max(0, Math.min(1, state.beamAlpha));
   if (pointing && state.beamAlpha > 0.01) {
-    // remember fingertip + direction
-    const tip = pointing[8];
-    const pip = pointing[6];
+    // remember fingertip + direction in mirrored pixel space
+    const tip = px(pointing, 8);
+    const pip = px(pointing, 6);
     const dx = tip.x - pip.x;
     const dy = tip.y - pip.y;
     const len = Math.hypot(dx, dy) || 1;
     state.beam = {
-      x: tip.x * canvas.width,
-      y: tip.y * canvas.height,
+      x: tip.x,
+      y: tip.y,
       dx: dx / len,
       dy: dy / len,
     };
@@ -187,7 +198,7 @@ function updateParticles(hands, dt) {
   let center = null;
   if (fist && chkParticles.checked) {
     const c = palmCenter(fist);
-    center = { x: c.x * canvas.width, y: c.y * canvas.height };
+    center = { x: (1 - c.x) * canvas.width, y: c.y * canvas.height };
     // emit a few particles each frame
     for (let i = 0; i < 3; i++) {
       const ang = Math.random() * Math.PI * 2;
@@ -219,9 +230,9 @@ function drawParticles() {
 }
 
 function updateTrail(hands, dt) {
-  const centers = hands.map((h) => palmCenter(h));
   if (hands.length) {
-    state.trail.push(centers[0]);
+    const c = palmCenter(hands[0]);
+    state.trail.push({ x: (1 - c.x) * canvas.width, y: c.y * canvas.height });
     if (state.trail.length > 22) state.trail.shift();
   } else {
     state.trail = [];
@@ -233,9 +244,7 @@ function drawTrail() {
   for (let i = 0; i < state.trail.length - 1; i++) {
     const p1 = state.trail[i], p2 = state.trail[i + 1];
     const a = (i / state.trail.length) * 0.7;
-    glowLine(p1.x * canvas.width, p1.y * canvas.height,
-             p2.x * canvas.width, p2.y * canvas.height,
-             "#c8f0ff", 2, 3);
+    glowLine(p1.x, p1.y, p2.x, p2.y, "#c8f0ff", 2, 3);
   }
 }
 
@@ -245,19 +254,34 @@ async function initLandmarker() {
   const fileset = await FilesetResolver.forVisionTasks(
     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
   );
-  handLandmarker = await HandLandmarker.createFromOptions(fileset, {
-    baseOptions: { modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task", delegate: "GPU" },
+  const modelAssetPath = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
+  const opts = (delegate) => ({
+    baseOptions: { modelAssetPath, delegate },
     runningMode: "VIDEO",
     numHands: 2,
+    minHandDetectionConfidence: 0.5,
+    minHandPresenceConfidence: 0.5,
+    minTrackingConfidence: 0.5,
   });
+  try {
+    handLandmarker = await HandLandmarker.createFromOptions(fileset, opts("GPU"));
+  } catch (gpuErr) {
+    console.warn("GPU delegate failed, falling back to CPU", gpuErr);
+    handLandmarker = await HandLandmarker.createFromOptions(fileset, opts("CPU"));
+  }
 }
 
+// Canvas uses CSS pixels (not DPR-scaled). The video is upscaled to fill the
+// stage with object-fit:cover and mirrored via CSS, so canvas rendering uses
+// the same CSS-pixel coordinate space as the visible video preview.
 function resize() {
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = canvas.clientWidth * dpr;
-  canvas.height = canvas.clientHeight * dpr;
-  const scale = dpr;
-  ctx.setTransform(scale, 0, 0, scale, 0, 0);
+  const w = Math.max(320, canvas.clientWidth);
+  const h = Math.max(240, canvas.clientHeight);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+  }
 }
 
 let lastVideoTime = -1;
@@ -282,7 +306,6 @@ function drawLoop(now) {
       setStatus("Tracking error");
     }
   }
-
   // Update + draw skeleton
   const colors = [COLORS.handA, COLORS.handB];
   hands.forEach((h, i) => drawSkeleton(h, colors[i % colors.length]));
@@ -296,7 +319,7 @@ function drawLoop(now) {
     hands.forEach((h) => {
       if (isOpenPalm(h)) {
         const c = palmCenter(h);
-        drawShieldAt(c.x * canvas.width, c.y * canvas.height, t, state.shieldAlpha);
+        drawShieldAt((1 - c.x) * canvas.width, c.y * canvas.height, t, state.shieldAlpha);
       }
     });
   }
