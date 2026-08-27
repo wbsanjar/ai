@@ -11,21 +11,24 @@ with neon skeleton and gesture-triggered effects.
 
 ## Deploy to Vercel
 
-1. Install the Vercel CLI (or use the dashboard).
+The repo root already contains a `vercel.json` with
+`"outputDirectory": "web-app"`, so the site deploys with **zero dashboard
+configuration** — just connect the GitHub repo and hit Deploy.
+
+1. Go to [vercel.com/new](https://vercel.com/new).
+2. Import the `wbsanjar/ai` GitHub repo.
+3. Click **Deploy**. That's it — the root `vercel.json` tells Vercel to serve
+   the static `web-app/` folder.
+
+Alternative via CLI:
 
 ```bash
+cd <repo-root>
 npm i -g vercel
-```
-
-2. Deploy from this folder:
-
-```bash
 vercel --prod
 ```
 
-Or push this folder to a repo and import it in the Vercel dashboard
-(Framework: "Other", Build Command: empty, Output directory: `.`).
-This folder is a fully static site — no backend needed.
+This is a fully static site — no backend needed.
 
 > Note: Your browser must have camera permission and the page must be served
 > over HTTPS (Vercel gives you this automatically) for the webcam to work.
