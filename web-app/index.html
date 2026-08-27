@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GestureFX Web — AI Hand Gesture Visual Effects</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1>⚡ GestureFX Web</h1>
+      <div class="controls">
+        <button id="btnStart" class="btn primary">▶ Start Camera</button>
+        <label class="toggle"><input type="checkbox" id="chkShield" checked /> Shield</label>
+        <label class="toggle"><input type="checkbox" id="chkBeam" checked /> Beam</label>
+        <label class="toggle"><input type="checkbox" id="chkParticles" checked /> Particles</label>
+      </div>
+      <div id="status" class="status">Idle</div>
+    </header>
+
+    <main class="stage">
+      <video id="video" autoplay playsinline muted></video>
+      <canvas id="output"></canvas>
+      <div id="error" class="error hidden"></div>
+    </main>
+
+    <footer class="hint">
+      Gestures: 🖐️ open palm → shield &nbsp;·&nbsp; ☝️ point → beam &nbsp;·&nbsp;
+      ✊ fist → particles &nbsp;·&nbsp; move hand → trail
+    </footer>
+  </div>
+
+  <!-- Hand tracking (MediaPipe.js). Using CDN script; loads on demand. -->
+  <script type="module" src="app.js"></script>
+</body>
+</html>
