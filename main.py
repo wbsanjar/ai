@@ -42,6 +42,11 @@ class Config:
     # Tradeoff: higher N = faster frame rate, slightly more response lag.
     detect_every_n_frames: int = 2
 
+    # Display orientation. True = selfie mirror view (like a mirror, natural
+    # for facing the camera). False = raw camera view (photo-style). In both
+    # modes the tracking stays locked to the hand you see on screen.
+    mirror_display: bool = True
+
     # Effects toggles
     enable_particles: bool = False
     enable_trails: bool = True
@@ -1241,6 +1246,7 @@ class HandVFXApp:
         self.frame_count = 0
         self.last_landmarks = None
         self.detect_counter = 0
+        self.mirror = self.config.mirror_display
 
         # Camera init
         print("[VFX] Opening webcam...")
@@ -1320,6 +1326,7 @@ class HandVFXApp:
         """Draw HUD text"""
         lines = [
             "Hand VFX  |  q: quit",
+            f"Mirror: {'ON' if self.mirror else 'OFF'} (m)  "
             f"Aura: {'ON' if self.config.enable_aura else 'OFF'} (a)  "
             f"Trail: {'ON' if self.config.enable_trails else 'OFF'} (t)  "
             f"Shield: {'ON' if self.config.enable_shield else 'OFF'} (s)  "
@@ -1340,7 +1347,13 @@ class HandVFXApp:
 
     def handle_key(self, key: int):
         """Handle keyboard input"""
-        if key == ord('a'):
+        if key == ord('m'):
+            self.mirror = not self.mirror
+            # Force an immediate re-detect so landmarks match the new
+            # orientation instead of reusing the old mirrored ones.
+            self.last_landmarks = None
+            print(f"[VFX] Mirror: {'ON' if self.mirror else 'OFF'}")
+        elif key == ord('a'):
             self.config.enable_aura = not self.config.enable_aura
             print(f"[VFX] Aura: {'ON' if self.config.enable_aura else 'OFF'}")
         elif key == ord('t'):
@@ -1359,7 +1372,7 @@ class HandVFXApp:
             print("[VFX] Cannot run — no camera available.")
             return
 
-        print("[VFX] Starting. Controls: q=quit  a=aura  t=trail  s=shield  g=gesture VFX")
+        print("[VFX] Starting. Controls: q=quit  m=mirror  a=aura  t=trail  s=shield  g=gesture VFX")
         print("[VFX] Gestures:")
         print("       Open palm (4 fingers spread)        -> Energy Shield")
         print("       Point (only index extended)         -> Repulsor Beam")
@@ -1388,7 +1401,7 @@ class HandVFXApp:
                     print("[VFX] WARNING: Frame read failed, retrying...")
                     continue
 
-                frame = cv2.flip(frame, 1)
+                frame = cv2.flip(frame, 1) if self.mirror else frame
                 processed = self.process_frame(frame)
 
                 cv2.imshow("Hand VFX System", processed)
