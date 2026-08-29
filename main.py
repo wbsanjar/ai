@@ -11,9 +11,15 @@ import numpy as np
 import random
 import math
 import time
+import os
 from collections import deque
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
+
+BaseOptions = mp.tasks.BaseOptions
+HandLandmarker = mp.tasks.vision.HandLandmarker
+HandLandmarkerOptions = mp.tasks.vision.HandLandmarkerOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
 
 # ============================================================================
 # CONFIGURATION
@@ -32,6 +38,9 @@ class Config:
     max_hands: int = 2
     detection_confidence: float = 0.5
     tracking_confidence: float = 0.5
+    # Run hand detection every N frames and reuse landmarks in between.
+    # Tradeoff: higher N = faster frame rate, slightly more response lag.
+    detect_every_n_frames: int = 2
 
     # Effects toggles
     enable_particles: bool = False
@@ -132,42 +141,37 @@ class Config:
 # ============================================================================
 
 class HandTracker:
-    """Handles hand detection using MediaPipe"""
+    """Handles hand detection using MediaPipe Tasks API"""
 
     def __init__(self, config: Config):
         self.config = config
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
-            static_image_mode=False,
-            max_num_hands=config.max_hands,
-            min_detection_confidence=config.detection_confidence,
+        model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hand_landmarker.task")
+        options = HandLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionRunningMode.VIDEO,
+            num_hands=config.max_hands,
+            min_hand_detection_confidence=config.detection_confidence,
+            min_hand_presence_confidence=config.detection_confidence,
             min_tracking_confidence=config.tracking_confidence,
-            model_complexity=1
         )
-
-        # Hand skeleton connections
-        self.connections = [
-            (0, 1), (1, 2), (2, 3), (3, 4),       # Thumb
-            (0, 5), (5, 6), (6, 7), (7, 8),        # Index
-            (5, 9), (9, 10), (10, 11), (11, 12),   # Middle
-            (9, 13), (13, 14), (14, 15), (15, 16), # Ring
-            (13, 17), (17, 18), (18, 19), (19, 20),# Pinky
-            (0, 17)                                 # Palm base
-        ]
+        self.landmarker = HandLandmarker.create_from_options(options)
+        self.frame_timestamp = 0
 
     def detect_hands(self, frame: np.ndarray) -> Optional[List[List[Tuple[int, int]]]]:
         """Detect hands and return pixel landmark positions"""
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = self.hands.process(rgb_frame)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+        self.frame_timestamp += 1
+        results = self.landmarker.detect_for_video(mp_image, self.frame_timestamp)
 
-        if not results.multi_hand_landmarks:
+        if not results.hand_landmarks:
             return None
 
         h, w = frame.shape[:2]
         all_landmarks = []
-        for hand_landmarks in results.multi_hand_landmarks:
+        for hand_landmarks in results.hand_landmarks:
             landmarks = []
-            for lm in hand_landmarks.landmark:
+            for lm in hand_landmarks:
                 x = int(lm.x * w)
                 y = int(lm.y * h)
                 landmarks.append((x, y))
@@ -1235,13 +1239,12 @@ class HandVFXApp:
         self.gesture_vfx = GestureEffectManager(self.config)
         self.last_time = time.time()
         self.frame_count = 0
+        self.last_landmarks = None
+        self.detect_counter = 0
 
-        # Camera init with macOS fallback
+        # Camera init
         print("[VFX] Opening webcam...")
-        self.cap = cv2.VideoCapture(0, cv2.CAP_AVFOUNDATION)
-        if not self.cap.isOpened():
-            print("[VFX] CAP_AVFOUNDATION failed, trying default backend...")
-            self.cap = cv2.VideoCapture(0)
+        self.cap = cv2.VideoCapture(0)
 
         if not self.cap.isOpened():
             print("[VFX] ERROR: Could not open webcam on index 0, trying index 1...")
@@ -1267,7 +1270,13 @@ class HandVFXApp:
 
         self.neon_renderer.update(dt)
 
-        landmarks_list = self.hand_tracker.detect_hands(frame)
+        # Run the (slow) hand detector on a cadence and reuse the last result
+        # between detections. Effects already smooth/fade, so a half-frame
+        # delay in landmark updates is imperceptible but nearly doubles FPS.
+        self.detect_counter += 1
+        if self.detect_counter % max(1, self.config.detect_every_n_frames) == 0:
+            self.last_landmarks = self.hand_tracker.detect_hands(frame)
+        landmarks_list = self.last_landmarks
 
         if landmarks_list:
             hand_colors = [
@@ -1295,9 +1304,13 @@ class HandVFXApp:
             cv2.addWeighted(frame, 1.0 - self.config.cinematic_darkening,
                             tint, self.config.cinematic_darkening, 0, dst=frame)
 
-        # Subtle bloom
+        # Subtle bloom (blur a downscaled copy, then upscale — much cheaper
+        # than a full-frame 21x21 Gaussian blur every frame)
         if self.config.bloom_intensity > 0:
-            bloom = cv2.GaussianBlur(frame, (21, 21), 0)
+            h, w = frame.shape[:2]
+            small = cv2.resize(frame, (w // 2, h // 2))
+            bloom = cv2.GaussianBlur(small, (21, 21), 0)
+            bloom = cv2.resize(bloom, (w, h))
             cv2.addWeighted(frame, 1.0, bloom, self.config.bloom_intensity, 0, dst=frame)
 
         self.draw_info(frame)
